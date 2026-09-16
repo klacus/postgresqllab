@@ -1,0 +1,88 @@
+{
+  "uid": "sampledw-sales",
+  "title": "SampleDW Sales",
+  "tags": ["postgresqllab", "sampledw"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-30d", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "product",
+        "label": "Product",
+        "type": "query",
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "olap" },
+        "includeAll": true,
+        "multi": true,
+        "refresh": 1,
+        "query": "SELECT name AS __text, product_key AS __value FROM sampledw.dim_product ORDER BY name;"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Daily net revenue",
+      "id": 1,
+      "gridPos": { "h": 9, "w": 16, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "olap" },
+      "fieldConfig": { "defaults": { "unit": "currencyEUR" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT c.bucket AS time, p.name AS metric, sum(c.total_net_amount) AS value FROM sampledw.cagg_sales_daily c JOIN sampledw.dim_product p USING (product_key) WHERE $__timeFilter(c.bucket) AND c.product_key IN ($product) GROUP BY 1, 2 ORDER BY 1;"
+        }
+      ]
+    },
+    {
+      "type": "piechart",
+      "title": "Revenue by category",
+      "id": 2,
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "olap" },
+      "fieldConfig": { "defaults": { "unit": "currencyEUR" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT p.category, sum(f.net_amount) AS revenue FROM sampledw.fact_sales f JOIN sampledw.dim_product p USING (product_key) WHERE $__timeFilter(f.sale_time) AND f.product_key IN ($product) GROUP BY 1 ORDER BY 2 DESC;"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Units sold per hour",
+      "id": 3,
+      "gridPos": { "h": 9, "w": 16, "x": 0, "y": 9 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "olap" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT time_bucket('1 hour', f.sale_time) AS time, sum(f.quantity) AS units FROM sampledw.fact_sales f WHERE $__timeFilter(f.sale_time) AND f.product_key IN ($product) GROUP BY 1 ORDER BY 1;"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Top products",
+      "id": 4,
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 9 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "olap" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT p.sku, p.name, sum(c.total_quantity) AS units, sum(c.total_net_amount) AS revenue FROM sampledw.cagg_sales_daily c JOIN sampledw.dim_product p USING (product_key) WHERE $__timeFilter(c.bucket) AND c.product_key IN ($product) GROUP BY 1, 2 ORDER BY revenue DESC;"
+        }
+      ]
+    }
+  ]
+}

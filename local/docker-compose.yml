@@ -1,0 +1,148 @@
+name: postgresqllab
+
+# Paths are relative to this file; ../../.. is the repository root.
+services:
+  database:
+    build:
+      context: ../../../database/oltp
+    # image: postgres:18-alpine
+    container_name: postgresqllab.oltp
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${OLTP_USER:?set OLTP_USER in .env}
+      POSTGRES_PASSWORD: ${OLTP_PASSWORD:?set OLTP_PASSWORD in .env}
+      POSTGRES_DB: ${OLTP_DB:?set OLTP_DB in .env}
+    ports:
+      - "${OLTP_PORT}:5432"
+    volumes:
+      - database_data:/var/lib/postgresql
+      - ../../../database/oltp/schema:/opt/oltp-schema:ro
+      - ../../../database/oltp/schema/init-docker.sh:/docker-entrypoint-initdb.d/10-oltp-schema.sh:ro
+    networks:
+      - postgresqllab_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h database || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  analytics:
+    build:
+      context: ../../../database/analytics
+    container_name: postgresqllab.olap
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${OLAP_USER:?set OLAP_USER in .env}
+      POSTGRES_PASSWORD: ${OLAP_PASSWORD:?set OLAP_PASSWORD in .env}
+      POSTGRES_DB: ${OLAP_DB:?set OLAP_DB in .env}
+    ports:
+      - "${OLAP_PORT}:5432"
+    volumes:
+      - analytics_data:/var/lib/postgresql
+      - ../../../database/analytics/schema:/opt/olap-analytics:ro
+      - ../../../database/analytics/schema/init-docker.sh:/docker-entrypoint-initdb.d/10-olap-analytics.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h analytics || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - postgresqllab_net
+
+
+  pgadmin:
+    build:
+      context: ../../../pgadmin
+      no_cache: true
+    container_name: postgresqllab.pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:?set PGADMIN_EMAIL in .env}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:?set PGADMIN_PASSWORD in .env}
+      PGPASSFILE: ./pgpass
+    ports:
+      - "${PGADMIN_PORT}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - pgadmin_config:/pgadmin4
+    user: "5050:root"
+    depends_on:
+      database:
+        condition: service_healthy
+      init-pgpass:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:80/misc/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - postgresqllab_net
+
+  init-pgpass:
+    # Generate the pgpass file in the pgadmin config volume so that pgadmin can pick it up at startup.
+    # This mess is needed so you can present pgpass with the right permissions to the pgadmin container (UID 5050) without messing up local file permissions in the repo.
+    image: busybox
+    container_name: postgresqllab.init-pgpass
+    restart: "no"
+    environment:
+      OLTP_DB: ${OLTP_DB}
+      OLTP_USER: ${OLTP_USER}
+      OLTP_PASSWORD: ${OLTP_PASSWORD}
+      OLAP_DB: ${OLAP_DB}
+      OLAP_USER: ${OLAP_USER}
+      OLAP_PASSWORD: ${OLAP_PASSWORD}
+    volumes:
+      - pgadmin_config:/pgadmin4:rw
+    command:
+      - sh
+      - -c
+      - 'printf "%s\n" "database:5432:$$OLTP_DB:$$OLTP_USER:$$OLTP_PASSWORD" "analytics:5432:$$OLAP_DB:$$OLAP_USER:$$OLAP_PASSWORD" > /pgadmin4/pgpass && chown 5050:root /pgadmin4/pgpass && chmod 600 /pgadmin4/pgpass'
+    networks:
+      - postgresqllab_net
+
+
+  grafana:
+    build:
+      context: ../../../grafana
+    container_name: postgresqllab.grafana
+    restart: unless-stopped
+    user: "472:472"
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:?set GRAFANA_USER in .env}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?set GRAFANA_PASSWORD in .env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/grafana_health.json
+      # Consumed by grafana/provisioning/datasources/datasources.yml
+      OLAP_DB_NAME: ${OLAP_DB}
+      OLAP_DB_USER: ${OLAP_USER}
+      OLAP_DB_PASSWORD: ${OLAP_PASSWORD}
+    volumes:
+      - ../../../grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      analytics:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - postgresqllab_net
+
+volumes:
+  database_data:
+  analytics_data:
+  grafana_data:
+  pgadmin_data:
+  pgadmin_config:
+  
+networks:
+  postgresqllab_net:
+    name: postgresqllab_net
+    driver: bridge
